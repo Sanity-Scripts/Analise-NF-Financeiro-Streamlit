@@ -104,8 +104,7 @@ def load_config() -> dict:
             
     if secrets_data:
         token = secrets_data.get('ACCESS_TOKEN', '')
-        st.info(f"Token carregado de secrets: {token[:8]}..." if token else "❌ Token vazio")
-        st.info(f"HOSTNAME carregado de secrets: {secrets_data.get('HOSTNAME', '')}")
+        st.info(f"STREAMLIT_CLOUD: {st.secrets.get('STREAMLIT_CLOUD', 'Não definido')}")
     else:
         st.warning("⚠️ Nenhum secret encontrado — verifique .env ou .streamlit/secrets.toml")
             
