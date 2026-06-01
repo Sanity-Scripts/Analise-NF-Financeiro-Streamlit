@@ -75,16 +75,31 @@ def load_config() -> dict:
         pass
 
     # 3.5. Atualiza com Secrets do Streamlit (Cloud ou secrets.toml local), se existir
+        # 3.5. Atualiza com Secrets do Streamlit (Cloud ou secrets.toml local), se existir
     secrets_data = {}
-
-    # Tenta ler nativamente via Streamlit (Funciona local com o arquivo e na Nuvem)
+    
+    # Tenta ler Secrets do Streamlit Cloud ou local (se secrets.toml existir)
     try:
-        # Se houver qualquer segredo configurado, st.secrets funciona como um dicionário
-        if st.secrets:
-            secrets_data = st.secrets
+        secrets_data_obj = st.secrets.to_dict()  # ← Converte para dict
+        if secrets_data_obj:
+            secrets_data = secrets_data_obj
     except Exception:
-        # Caso não exista nenhum secret configurado em ambiente local
-        secrets_data = {}
+        # Se falhar, tenta ler tomllib direto (local com secrets.toml)
+        secrets_path = ROOT_DIR / ".streamlit" / "secrets.toml"
+        if secrets_path.exists():
+            try:
+                import tomllib
+                with secrets_path.open("rb") as file:
+                    secrets_data = tomllib.load(file)
+            except Exception:
+                pass
+
+    # Debug: mostra o token
+    if secrets_data:
+        token = secrets_data.get('ACCESS_TOKEN', '')
+        st.info(f"Token carregado de secrets: {token[:8]}..." if token else "❌ Token vazio")
+    else:
+        st.warning("⚠️ Nenhum secret encontrado — verifique .env ou .streamlit/secrets.toml")
 
     # Preenche o seu dicionário de valores
     for key in values.keys():
