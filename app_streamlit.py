@@ -24,7 +24,9 @@ LOGO_PATH = ROOT_DIR / "logo-sanity-medium-new.png"
 UPLOAD_DIR = ROOT_DIR / "uploads_streamlit"
 TMP_PDFS_DIR = ROOT_DIR / "pdfs_tmp_sharepoint"
 SECRET_SECTION = "meus_arquivos"
+SECRET_MAIN_B64_KEYS = ("main_py_b64", "script_oculto_b64")
 SECRET_MAIN_KEYS = ("main_py", "script_oculto")
+SECRET_MAIN_B64_ENV_KEYS = ("STREAMLIT_SECRET_MAIN_PY_B64", "MAIN_PY_CODE_B64", "SCRIPT_OCULTO_B64")
 SECRET_MAIN_ENV_KEYS = ("STREAMLIT_SECRET_MAIN_PY", "MAIN_PY_CODE", "SCRIPT_OCULTO")
 
 DEFAULTS = {
@@ -74,42 +76,11 @@ def load_config() -> dict:
         # Opcional: Cria o arquivo local apenas se nenhum dos dois existir (evita criar na nuvem sem necessidade)
         pass
 
-    # 3.5. Atualiza com Secrets do Streamlit (Cloud ou secrets.toml local), se existir
-        # 3.5. Atualiza com Secrets do Streamlit (Cloud ou secrets.toml local), se existir
-    secrets_data = {}
-    
-    # Tenta ler Secrets do Streamlit Cloud ou local (se secrets.toml existir)
-    try:
-        secrets_data_obj = st.secrets.to_dict()  # ← Converte para dict
-        if secrets_data_obj:
-            secrets_data = secrets_data_obj
-    except Exception:
-        # Se falhar, tenta ler tomllib direto (local com secrets.toml)
-        secrets_path = ROOT_DIR / ".streamlit" / "secrets.toml"
-        if secrets_path.exists():
-            try:
-                import tomllib
-                with secrets_path.open("rb") as file:
-                    secrets_data = tomllib.load(file)
-            except Exception:
-                pass
-            
-    
-
-    # Preenche o seu dicionário de valores
+    # 3.5. Atualiza com Secrets simples do Streamlit, se existirem.
+    secrets_data = _load_secrets_dict()
     for key in values.keys():
         if key in secrets_data and not isinstance(secrets_data[key], dict):
             values[key] = str(secrets_data[key])
-            
-            
-    if secrets_data:
-        token = secrets_data.get('ACCESS_TOKEN', '')
-        st.info(f"STREAMLIT_CLOUD: {secrets_data.get('STREAMLIT_CLOUD', 'Não definido')}")
-    else:
-        st.warning("⚠️ Nenhum secret encontrado — verifique .env ou .streamlit/secrets.toml")
-            
-    if "meus_arquivos" in secrets_data:
-        codigo_do_main = secrets_data["meus_arquivos"]["main_py"]
 
     # 4. CRUCIAL: Sobrescreve com as variáveis reais do ambiente do sistema (Nuvem/OS)
     # Só trazemos para o dicionário as chaves que o seu app realmente espera usar
@@ -127,6 +98,23 @@ def save_config(values: dict) -> None:
 
     for key, value in values.items():
         set_key(str(ENV_PATH), key, str(value or ""))
+
+
+def _load_secrets_dict() -> dict:
+    try:
+        return st.secrets.to_dict()
+    except Exception:
+        secrets_path = ROOT_DIR / ".streamlit" / "secrets.toml"
+        if not secrets_path.exists():
+            return {}
+
+        try:
+            import tomllib
+
+            with secrets_path.open("rb") as file:
+                return tomllib.load(file)
+        except Exception:
+            return {}
 
 
 def _secret_value(section: str, key: str) -> str:
@@ -159,15 +147,25 @@ def _decode_secret_code(raw_value: str) -> str:
     if raw_value.startswith("BASE64:"):
         encoded = raw_value[len("BASE64:") :].strip()
         try:
-            return base64.b64decode(encoded).decode("utf-8")
+            return base64.b64decode(encoded).decode("utf-8-sig")
         except Exception:
             return ""
     return raw_value
 
 
 def load_hidden_backend_code() -> str:
+    for key in SECRET_MAIN_B64_KEYS:
+        code = _decode_secret_code(f"BASE64:{_secret_value(SECRET_SECTION, key)}")
+        if code.strip():
+            return code
+
     for key in SECRET_MAIN_KEYS:
         code = _decode_secret_code(_secret_value(SECRET_SECTION, key))
+        if code.strip():
+            return code
+
+    for key in SECRET_MAIN_B64_ENV_KEYS:
+        code = _decode_secret_code(f"BASE64:{os.environ.get(key, '')}")
         if code.strip():
             return code
 
