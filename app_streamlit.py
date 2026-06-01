@@ -94,13 +94,6 @@ def load_config() -> dict:
             except Exception:
                 pass
 
-    # Debug: mostra o token
-    if secrets_data:
-        token = secrets_data.get('ACCESS_TOKEN', '')
-        st.info(f"Token carregado de secrets: {token[:8]}..." if token else "❌ Token vazio")
-    else:
-        st.warning("⚠️ Nenhum secret encontrado — verifique .env ou .streamlit/secrets.toml")
-
     # Preenche o seu dicionário de valores
     for key in values.keys():
         if key in secrets_data and not isinstance(secrets_data[key], dict):
