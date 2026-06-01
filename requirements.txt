@@ -7,6 +7,6 @@ python-dotenv
 pandas
 pyinstaller
 pytz
-pywin32
-xlwings
+pywin32; platform_system == "Windows"
+xlwings; platform_system == "Windows"
 streamlit
