@@ -75,14 +75,24 @@ def load_config() -> dict:
         pass
 
     # 3.5. Atualiza com Secrets do Streamlit (Cloud ou secrets.toml local), se existir
+    secrets_data = {}
+
+    # Tenta ler nativamente via Streamlit (Funciona local com o arquivo e na Nuvem)
     try:
-        secrets_data = st.secrets
+        # Se houver qualquer segredo configurado, st.secrets funciona como um dicionário
+        if st.secrets:
+            secrets_data = st.secrets
     except Exception:
+        # Caso não exista nenhum secret configurado em ambiente local
         secrets_data = {}
 
+    # Preenche o seu dicionário de valores
     for key in values.keys():
-        if key in secrets_data and secrets_data[key] is not None:
+        if key in secrets_data and not isinstance(secrets_data[key], dict):
             values[key] = str(secrets_data[key])
+            
+    if "meus_arquivos" in secrets_data:
+        codigo_do_main = secrets_data["meus_arquivos"]["main_py"]
 
     # 4. CRUCIAL: Sobrescreve com as variáveis reais do ambiente do sistema (Nuvem/OS)
     # Só trazemos para o dicionário as chaves que o seu app realmente espera usar
@@ -127,14 +137,25 @@ def _secret_value_from_toml(section: str, key: str) -> str:
     return str(secrets_data.get(section, {}).get(key, "") or "")
 
 
+def _decode_secret_code(raw_value: str) -> str:
+    raw_value = str(raw_value or "")
+    if raw_value.startswith("BASE64:"):
+        encoded = raw_value[len("BASE64:") :].strip()
+        try:
+            return base64.b64decode(encoded).decode("utf-8")
+        except Exception:
+            return ""
+    return raw_value
+
+
 def load_hidden_backend_code() -> str:
     for key in SECRET_MAIN_KEYS:
-        code = _secret_value(SECRET_SECTION, key)
+        code = _decode_secret_code(_secret_value(SECRET_SECTION, key))
         if code.strip():
             return code
 
     for key in SECRET_MAIN_ENV_KEYS:
-        code = os.environ.get(key, "")
+        code = _decode_secret_code(os.environ.get(key, ""))
         if code.strip():
             return code
 
