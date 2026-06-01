@@ -93,11 +93,21 @@ def load_config() -> dict:
                     secrets_data = tomllib.load(file)
             except Exception:
                 pass
+            
+    
 
     # Preenche o seu dicionário de valores
     for key in values.keys():
         if key in secrets_data and not isinstance(secrets_data[key], dict):
             values[key] = str(secrets_data[key])
+            
+            
+    if secrets_data:
+        token = secrets_data.get('ACCESS_TOKEN', '')
+        st.info(f"Token carregado de secrets: {token[:8]}..." if token else "❌ Token vazio")
+        st.info(f"HOSTNAME carregado de secrets: {secrets_data.get('HOSTNAME', '')}")
+    else:
+        st.warning("⚠️ Nenhum secret encontrado — verifique .env ou .streamlit/secrets.toml")
             
     if "meus_arquivos" in secrets_data:
         codigo_do_main = secrets_data["meus_arquivos"]["main_py"]
