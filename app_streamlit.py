@@ -74,6 +74,16 @@ def load_config() -> dict:
         # Opcional: Cria o arquivo local apenas se nenhum dos dois existir (evita criar na nuvem sem necessidade)
         pass
 
+    # 3.5. Atualiza com Secrets do Streamlit (Cloud ou secrets.toml local), se existir
+    try:
+        secrets_data = st.secrets
+    except Exception:
+        secrets_data = {}
+
+    for key in values.keys():
+        if key in secrets_data and secrets_data[key] is not None:
+            values[key] = str(secrets_data[key])
+
     # 4. CRUCIAL: Sobrescreve com as variáveis reais do ambiente do sistema (Nuvem/OS)
     # Só trazemos para o dicionário as chaves que o seu app realmente espera usar
     for key in values.keys():
