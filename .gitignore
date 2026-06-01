@@ -128,7 +128,8 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
+*.env
+.streamlit/secrets.toml
 .venv
 env/
 venv/
@@ -179,3 +180,19 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+/Notas Fiscais
+
+/.vscode
+
+*.exe
+
+/logs
+
+*.zip
+
+/uploads_streamlit
+
+/pdfs_tmp_sharepoint
+
+/pdfs

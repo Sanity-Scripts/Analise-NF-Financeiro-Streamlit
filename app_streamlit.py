@@ -1,0 +1,692 @@
+import base64
+import html
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from pathlib import Path
+
+import streamlit as st
+from dotenv import dotenv_values, set_key
+
+
+
+ROOT_DIR = Path(__file__).resolve().parent
+
+STREAMLIT_CLOUD = os.environ.get("STREAMLIT_CLOUD", "false").lower() == "true"
+ENV_PATH = ROOT_DIR / ".env"
+DEFAULT_ENV_PATH = ROOT_DIR / "default.env"
+MAIN_PATH = ROOT_DIR / "main.py"
+LOGO_PATH = ROOT_DIR / "logo-sanity-medium-new.png"
+UPLOAD_DIR = ROOT_DIR / "uploads_streamlit"
+TMP_PDFS_DIR = ROOT_DIR / "pdfs_tmp_sharepoint"
+SECRET_SECTION = "meus_arquivos"
+SECRET_MAIN_KEYS = ("main_py", "script_oculto")
+SECRET_MAIN_ENV_KEYS = ("STREAMLIT_SECRET_MAIN_PY", "MAIN_PY_CODE", "SCRIPT_OCULTO")
+
+DEFAULTS = {
+    "ACCESS_TOKEN": "",
+    "TENANT_ID": "",
+    "APP_ID": "",
+    "CLIENT_SECRET": "",
+    "HOSTNAME": "",
+    "SITE_PATH": "/sites/ContasaPagar",
+    "FILE_NAME": "BANCO_DE_DADOS  1 03_2026.xlsx",
+    "SHEET_NAME": "CARGA HORARIA",
+    "MODEL": "",
+    "OPENAI_API_KEY": "",
+    "MODO_LOCAL": "false",
+    "CAMINHO_PLANILHA_LOCAL": "",
+    "PATH_PDFS": "",
+    "BAIXAR_PDFS_SHAREPOINT": "false",
+    "CAMINHO_PASTA_PDFS_SHAREPOINT": (
+        "CONTAS A PAGAR/3 - NOTAS FISCAIS TERCEIROS (Consultores)/"
+        "SANITY CONSULTORIA/2026/03.2026/SIMPLES NACIONAL - FORA DE SP"
+    ),
+    "PROMPT": "",
+}
+
+
+
+def load_config() -> dict:
+    # 1. Começa com os valores padrão hardcoded (se houver)
+    values = DEFAULTS.copy()
+
+    # 2. Atualiza com o arquivo padrão/base (.env.default), se existir
+    if DEFAULT_ENV_PATH.exists():
+        values.update(
+            {
+                k: v
+                for k, v in dotenv_values(DEFAULT_ENV_PATH).items()
+                if v is not None
+            }
+        )
+
+    # 3. Atualiza com o arquivo local (.env), se existir
+    if ENV_PATH.exists():
+        values.update(
+            {k: v for k, v in dotenv_values(ENV_PATH).items() if v is not None}
+        )
+    elif not ENV_PATH.exists() and not DEFAULT_ENV_PATH.exists():
+        # Opcional: Cria o arquivo local apenas se nenhum dos dois existir (evita criar na nuvem sem necessidade)
+        pass
+
+    # 4. CRUCIAL: Sobrescreve com as variáveis reais do ambiente do sistema (Nuvem/OS)
+    # Só trazemos para o dicionário as chaves que o seu app realmente espera usar
+    for key in values.keys():
+        env_value = os.environ.get(key)
+        if env_value is not None:
+            values[key] = env_value
+
+    return values
+
+
+def save_config(values: dict) -> None:
+    if not ENV_PATH.exists():
+        ENV_PATH.write_text("", encoding="utf-8")
+
+    for key, value in values.items():
+        set_key(str(ENV_PATH), key, str(value or ""))
+
+
+def _secret_value(section: str, key: str) -> str:
+    try:
+        value = st.secrets[section][key]
+    except Exception:
+        value = _secret_value_from_toml(section, key)
+
+    return str(value or "")
+
+
+def _secret_value_from_toml(section: str, key: str) -> str:
+    secrets_path = ROOT_DIR / ".streamlit" / "secrets.toml"
+    if not secrets_path.exists():
+        return ""
+
+    try:
+        import tomllib
+
+        with secrets_path.open("rb") as file:
+            secrets_data = tomllib.load(file)
+    except Exception:
+        return ""
+
+    return str(secrets_data.get(section, {}).get(key, "") or "")
+
+
+def load_hidden_backend_code() -> str:
+    for key in SECRET_MAIN_KEYS:
+        code = _secret_value(SECRET_SECTION, key)
+        if code.strip():
+            return code
+
+    for key in SECRET_MAIN_ENV_KEYS:
+        code = os.environ.get(key, "")
+        if code.strip():
+            return code
+
+    return ""
+
+
+def build_secret_backend_command(secret_code: str) -> tuple[list[str], Path | None]:
+    if not secret_code.strip():
+        return [sys.executable, "-u", str(MAIN_PATH)], None
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="streamlit_secret_backend_"))
+    secret_file = temp_dir / "main_secret.py"
+    secret_file.write_text(secret_code, encoding="utf-8")
+
+    runner = (
+        "import pathlib, sys; "
+        "secret_path = pathlib.Path(sys.argv[1]); "
+        "fake_file = sys.argv[2]; "
+        "code = secret_path.read_text(encoding='utf-8-sig'); "
+        "namespace = {'__name__': '__main__', '__file__': fake_file, "
+        "'__package__': None, '__cached__': None}; "
+        "exec(compile(code, fake_file, 'exec'), namespace)"
+    )
+
+    return [sys.executable, "-u", "-c", runner, str(secret_file), str(MAIN_PATH)], temp_dir
+
+
+def save_uploaded_file(uploaded_file, target_dir: Path) -> Path:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / uploaded_file.name
+    target.write_bytes(uploaded_file.getbuffer())
+    return target
+
+
+def limpar_uploads_anteriores(base_dir: Path, manter_ultimos: int = 3) -> None:
+    """
+    Remove diretórios antigos de upload, mantendo apenas os mais recentes.
+    
+    Args:
+        base_dir: Diretório base de uploads (ex: uploads_streamlit/pdfs)
+        manter_ultimos: Número de execuções anteriores a manter
+    """
+    if not base_dir.exists():
+        return
+    
+    try:
+        # Lista todos os diretórios com timestamp
+        diretorios = sorted(
+            [d for d in base_dir.iterdir() if d.is_dir()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True
+        )
+        
+        # Remove tudo exceto os últimos N diretórios
+        for dir_antigo in diretorios[manter_ultimos:]:
+            try:
+                shutil.rmtree(dir_antigo)
+            except Exception as e:
+                print(f"Aviso: Não foi possível remover {dir_antigo}: {e}")
+    except Exception as e:
+        print(f"Aviso: Erro ao limpar uploads anteriores: {e}")
+
+
+def _gerar_log_processamento(output_lines: list) -> str:
+    """
+    Gera um arquivo de log com toda a saída do processamento.
+    Retorna o caminho do arquivo gerado.
+    """
+    from datetime import datetime
+    
+    try:
+        # Cria diretório de logs
+        logs_dir = UPLOAD_DIR / "logs_processamento"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        arquivo_log = logs_dir / f"processamento_{timestamp}.log"
+        
+        # Escreve o arquivo de log com toda a saída
+        with open(arquivo_log, 'w', encoding='utf-8') as f:
+            f.write(f"Arquivo de Log de Processamento - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("=" * 80 + "\n\n")
+            for line in output_lines:
+                f.write(line + "\n")
+        
+        return str(arquivo_log)
+    except Exception as e:
+        print(f"Erro ao gerar arquivo de log: {e}")
+        return ""
+
+
+def _carregar_arquivo_bytes(file_path: str):
+    if not file_path:
+        return None
+
+    path = Path(file_path)
+    if not path.exists():
+        return None
+
+    return path.name, path.read_bytes()
+
+
+def logo_data_uri() -> str:
+    if not LOGO_PATH.exists():
+        return ""
+
+    encoded = base64.b64encode(LOGO_PATH.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def inject_style() -> None:
+    logo_uri = logo_data_uri()
+    background_logo = (
+        f"""
+        .stApp::before {{
+            content: "";
+            position: fixed;
+            inset: 0;
+            background-image: url("{logo_uri}");
+            background-repeat: no-repeat;
+            background-position: center 42%;
+            background-size: min(56vw, 620px);
+            opacity: 0.075;
+            pointer-events: none;
+            z-index: 0;
+        }}
+        """
+        if logo_uri
+        else ""
+    )
+
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{
+            background:
+                radial-gradient(circle at top left, rgba(38, 166, 255, 0.34), transparent 34rem),
+                linear-gradient(135deg, #061b3d 0%, #0a4a8f 48%, #18a6df 100%);
+            color: #f7fbff;
+        }}
+        {background_logo}
+        .block-container {{
+            max-width: 1180px;
+            padding-top: 2.2rem;
+            padding-bottom: 3rem;
+            position: relative;
+            z-index: 1;
+        }}
+        .hero {{
+            display: flex;
+            align-items: center;
+            gap: 1.2rem;
+            margin-bottom: 1.6rem;
+            margin-top: 2rem;
+        }}
+        .hero img {{
+            width: 132px;
+            height: auto;
+            filter: drop-shadow(0 18px 30px rgba(0, 0, 0, 0.28));
+        }}
+        .hero h1 {{
+            font-size: clamp(1rem, 3vw, 3.5rem);
+            line-height: 1;
+            margin: 0;
+            letter-spacing: 0;
+        }}
+        .hero p {{
+            margin: 0.4rem 0 0;
+            color: rgba(247, 251, 255, 0.82);
+            font-size: 1.02rem;
+        }}
+        section[data-testid="stSidebar"] {{
+            background: rgba(3, 20, 45, 0.82);
+        }}
+        div[data-testid="stForm"], div[data-testid="stExpander"] {{
+            background: rgba(255, 255, 255, 0.10);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 8px;
+            padding: 1rem;
+            box-shadow: 0 24px 60px rgba(1, 18, 38, 0.22);
+            backdrop-filter: blur(16px);
+        }}
+        .stTextInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div {{
+            border-radius: 8px;
+        }}
+        .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {{
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.22);
+            background: linear-gradient(135deg, #0097d7, #004ca3);
+            color: white;
+            min-height: 2.75rem;
+            font-weight: 700;
+        }}
+        .log-box {{
+            min-height: 420px;
+            max-height: 620px;
+            overflow: auto;
+            white-space: pre-wrap;
+            background: rgba(0, 13, 31, 0.78);
+            border: 1px solid rgba(151, 215, 255, 0.26);
+            border-radius: 8px;
+            padding: 1rem;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 0.88rem;
+            color: #dff3ff;
+        }}
+        input {{
+            background: rgba(0, 0, 0, 0.9) !important;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            color: white !important;
+        }}
+        
+        div[data-testid="stMarkdownContainer"] {{
+           color: white !important;
+        }}
+        button[kind="segmented_control"] {{
+            background: rgba(255, 255, 255, 0.10) !important;
+        }}
+        span[class="stTooltipIcon"] {{
+            color: white !important;
+        }}
+        
+        /* Esconde o menu de 3 pontinhos (Settings, Main Menu) */
+        #MainMenu {{visibility: hidden}}
+        
+        /* Esconde a barra superior inteira */
+        header {{background: transparent}}
+        
+        /* Esconde o rodapé (Made with Streamlit) */
+        footer {{visibility: hidden}}
+        
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_header() -> None:
+    logo_uri = logo_data_uri()
+    logo_html = f'<img src="{logo_uri}" alt="Sanity">' if logo_uri else ""
+    st.markdown(
+        f"""
+        <div class="hero">
+            {logo_html}
+            <div>
+                <h1>Analise Notas Fiscais Financeiro</h1>
+                <p>Processamento local ou em nuvem com logs visiveis durante toda a execução.</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def build_env_payload(config: dict, modo_operacao: str, token_acesso: str, form_values: dict) -> dict:
+    modo_local = modo_operacao == "LOCAL"
+    path_pdfs = form_values["path_pdfs"]
+
+    if not modo_local:
+        TMP_PDFS_DIR.mkdir(parents=True, exist_ok=True)
+        path_pdfs = str(TMP_PDFS_DIR)
+
+    return {
+        "ACCESS_TOKEN": token_acesso,
+        "TENANT_ID": form_values["tenant_id"],
+        "APP_ID": form_values["app_id"],
+        "CLIENT_SECRET": form_values["client_secret"],
+        "HOSTNAME": form_values["hostname"],
+        "SITE_PATH": form_values["site_path"],
+        "FILE_NAME": form_values["file_name"],
+        "SHEET_NAME": form_values["sheet_name"],
+        "MODEL": form_values["model"],
+        "OPENAI_API_KEY": form_values["openai_api_key"],
+        "MODO_LOCAL": str(modo_local).lower(),
+        "CAMINHO_PLANILHA_LOCAL": form_values["caminho_planilha_local"] if modo_local else "",
+        "PATH_PDFS": path_pdfs,
+        "BAIXAR_PDFS_SHAREPOINT": str(not modo_local).lower(),
+        "CAMINHO_PASTA_PDFS_SHAREPOINT": (
+            "" if modo_local else form_values["caminho_pasta_pdfs_sharepoint"]
+        ),
+        "PROMPT": form_values["prompt"] or config.get("PROMPT", ""),
+    }
+
+
+def run_backend() -> tuple[int, str, str]:
+    """
+    Executa o backend e retorna (código_retorno, caminho_excel, caminho_log).
+    """
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    backend_command, temp_secret_dir = build_secret_backend_command(load_hidden_backend_code())
+
+    try:
+        process = subprocess.Popen(
+            backend_command,
+            cwd=str(ROOT_DIR),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+
+        log_area = st.empty()
+        output = []
+        caminho_excel = ""
+        caminho_log = ""
+
+        assert process.stdout is not None
+        for line in iter(process.stdout.readline, ""):
+            output.append(line.rstrip())
+            
+            # Extrai o caminho do arquivo processado se o script o imprimir
+            if "Arquivo salvo com sucesso:" in line:
+                try:
+                    caminho_excel = line.split("Arquivo salvo com sucesso:")[-1].strip()
+                except Exception:
+                    pass
+            
+            safe_output = "<br>".join(html.escape(item) for item in output[:])
+            log_area.markdown(
+                f'<div class="log-box">{safe_output}</div>',
+                unsafe_allow_html=True,
+            )
+
+        process.wait()
+        
+        # Gera arquivo de log com toda a saída do processamento
+        caminho_log = _gerar_log_processamento(output)
+        
+        return process.returncode, caminho_excel, caminho_log
+    finally:
+        if temp_secret_dir is not None:
+            shutil.rmtree(temp_secret_dir, ignore_errors=True)
+
+
+def main() -> None:
+    st.set_page_config(
+        page_title="Analise NF Financeiro",
+        page_icon=str(LOGO_PATH) if LOGO_PATH.exists() else None,
+        layout="wide",
+    )
+    inject_style()
+    render_header()
+
+    config = load_config()
+
+    if "last_result" not in st.session_state:
+        st.session_state["last_result"] = None
+    if "show_result_messages" not in st.session_state:
+        st.session_state["show_result_messages"] = False
+
+    with st.sidebar:
+        if LOGO_PATH.exists():
+            st.image(str(LOGO_PATH), width='stretch')
+        # st.caption("Configure, salve e execute o backend.")
+        # st.info(f"Ambiente: {ENV_PATH.name}")
+
+    # Segmented control FORA do formulário para ser reativo
+    modo_atual = "LOCAL" if config.get("MODO_LOCAL", "false").lower() == "true" else "NUVEM"
+    modo_operacao = st.segmented_control(
+        "Origem dos arquivos",
+        ["NUVEM", "LOCAL"],
+        default=modo_atual,
+    )
+
+    with st.form("config_form"):
+
+        token_acesso = st.text_input(
+            "Token de acesso obrigatorio",
+            type="password",
+            help="Token para validação",
+        )
+        
+        tenant_id = config.get("TENANT_ID", "")
+        app_id = config.get("APP_ID", "")
+        client_secret = config.get("CLIENT_SECRET", "")
+        hostname = config.get("HOSTNAME", "")
+        model = config.get("MODEL", "")
+        openai_api_key = config.get("OPENAI_API_KEY", "")
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if modo_operacao == "NUVEM":
+                site_path = st.text_input("SITE_PATH", value=config.get("SITE_PATH", DEFAULTS["SITE_PATH"]), help="Site onde estão todos os arquivos")
+                file_name = st.text_input("FILE_NAME", value=config.get("FILE_NAME", DEFAULTS["FILE_NAME"]), help="Nome do arquivo Excel que está no SharePoint (ex: BANCO_DE_DADOS  1 03_2026.xlsx)")
+            if modo_operacao == "LOCAL":
+                sheet_name = st.text_input("SHEET_NAME", value=config.get("SHEET_NAME", DEFAULTS["SHEET_NAME"]), help="Nome da aba da planilha")
+        
+        with col_b:
+            if modo_operacao == "NUVEM":
+                sheet_name = st.text_input("SHEET_NAME", value=config.get("SHEET_NAME", DEFAULTS["SHEET_NAME"]), help="Nome da aba da planilha")
+
+            if modo_operacao == "LOCAL":
+                uploaded_sheet = st.file_uploader("Planilha local (.xlsx)", type=["xlsx", "xlsm"], help="Envie a planilha Excel que está no SharePoint para processamento local.")
+                # caminho_planilha_local = st.text_input(
+                #     "CAMINHO_PLANILHA_LOCAL",
+                #     placeholder="Caso não tenha enviado a planilha, informe o caminho local onde ela está disponível para leitura (ex: C:/meus_arquivos/planilha.xlsx)",
+                # )
+                site_path = ""
+                file_name = uploaded_sheet.name if uploaded_sheet is not None else ""
+                uploaded_pdfs = st.file_uploader(
+                    "PDFs locais",
+                    type=["pdf"],
+                    accept_multiple_files=True,
+                    help="Envie os arquivos PDF que estão no SharePoint para processamento local."
+                )
+                path_pdfs = ""  # Sempre começa vazio em modo LOCAL
+                caminho_pasta_pdfs_sharepoint = config.get(
+                    "CAMINHO_PASTA_PDFS_SHAREPOINT",
+                    DEFAULTS["CAMINHO_PASTA_PDFS_SHAREPOINT"],
+                )
+                caminho_planilha_local = ""  # Inicializa aqui também
+            else:
+                uploaded_sheet = None
+                uploaded_pdfs = []
+                caminho_planilha_local = ""
+                path_pdfs = str(TMP_PDFS_DIR)
+                caminho_pasta_pdfs_sharepoint = st.text_input(
+                    "CAMINHO_PASTA_PDFS_SHAREPOINT",
+                    value=config.get(
+                        "CAMINHO_PASTA_PDFS_SHAREPOINT",
+                        DEFAULTS["CAMINHO_PASTA_PDFS_SHAREPOINT"],
+                    ),
+                    help="Caminho da pasta onde os arquivos PDF estão armazenados no SharePoint."
+                )
+
+        prompt = config.get("PROMPT", "")
+
+        submitted = st.form_submit_button("Salvar configuracao e executar", width='stretch')
+
+    can_run = submitted
+
+    if submitted:
+        if not token_acesso.strip():
+            st.error("Informe o token de acesso obrigatorio antes de executar.")
+            can_run = False
+        elif token_acesso.strip() != config.get("ACCESS_TOKEN", ""):
+            st.error("Token de acesso invalido. Verifique e tente novamente.")
+            can_run = False
+
+        if modo_operacao == "LOCAL" and can_run:
+            if uploaded_sheet is not None:
+                # Cria um diretório único por execução
+                session_id = f"{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+                planilhas_dir = UPLOAD_DIR / "planilhas" / session_id
+                caminho_planilha_local = str(save_uploaded_file(uploaded_sheet, planilhas_dir))
+            if uploaded_pdfs:
+                session_id = f"{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+                pdf_dir = UPLOAD_DIR / "pdfs" / session_id
+                for uploaded_pdf in uploaded_pdfs:
+                    save_uploaded_file(uploaded_pdf, pdf_dir)
+                path_pdfs = str(pdf_dir)
+                # Limpa uploads antigos (mantém últimas 3 execuções)
+                limpar_uploads_anteriores(UPLOAD_DIR / "pdfs", manter_ultimos=3)
+                limpar_uploads_anteriores(UPLOAD_DIR / "planilhas", manter_ultimos=3)
+            if uploaded_sheet is None or str(caminho_planilha_local).strip() == "":
+                st.error("Envie a planilha local obrigatoria.")
+                can_run = False
+            if not path_pdfs:
+                st.error("Informe ou envie os PDFs locais.")
+                can_run = False
+
+        if can_run:
+            form_values = {
+                "tenant_id": tenant_id,
+                "app_id": app_id,
+                "client_secret": client_secret,
+                "hostname": hostname,
+                "site_path": site_path,
+                "file_name": file_name,
+                "sheet_name": sheet_name,
+                "model": model,
+                "openai_api_key": openai_api_key,
+                "caminho_planilha_local": caminho_planilha_local,
+                "path_pdfs": path_pdfs,
+                "caminho_pasta_pdfs_sharepoint": caminho_pasta_pdfs_sharepoint,
+                "prompt": prompt,
+            }
+
+            payload = build_env_payload(config, modo_operacao, token_acesso, form_values)
+            for key, value in payload.items():
+                os.environ[key] = str(value or "")
+
+            # Limpa PDFs temporários do modo NUVEM antes de processar (última execução)
+            if modo_operacao == "NUVEM" and TMP_PDFS_DIR.exists():
+                try:
+                    for pdf_file in TMP_PDFS_DIR.glob("*.pdf"):
+                        pdf_file.unlink()
+                except Exception as e:
+                    print(f"Aviso: Erro ao limpar PDFs temporários: {e}")
+
+            # save_config(payload)
+
+            # st.success("Configuracao salva no .env. Iniciando processamento...")
+            with st.spinner("Executando backend..."):
+                return_code, caminho_excel, caminho_log = run_backend()
+
+            modo_local = os.environ.get('MODO_LOCAL', 'false').lower() == 'true'
+            excel_info = _carregar_arquivo_bytes(caminho_excel) if modo_local else None
+            log_info = _carregar_arquivo_bytes(caminho_log)
+
+            st.session_state["last_result"] = {
+                "return_code": return_code,
+                "modo_local": modo_local,
+                "excel": excel_info,
+                "log": log_info,
+            }
+            st.session_state["show_result_messages"] = True
+
+    last_result = st.session_state.get("last_result")
+    show_messages = st.session_state.get("show_result_messages", False)
+
+    if last_result:
+        if show_messages:
+            if last_result["return_code"] == 0:
+                st.success("✅ Processamento finalizado com sucesso.")
+            else:
+                st.error(f"❌ Processamento finalizado com erro. Código: {last_result['return_code']}")
+
+        # Download da planilha processada (modo LOCAL)
+        if last_result["excel"] and last_result["modo_local"]:
+            excel_name, excel_bytes = last_result["excel"]
+            st.download_button(
+                label=f"📥 Baixar Planilha Processada: {excel_name}",
+                data=excel_bytes,
+                file_name=excel_name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="download_excel"
+            )
+        elif last_result["modo_local"] and show_messages:
+            st.warning(
+                "⚠️ Planilha processada não encontrada. "
+                "Verifique se a planilha foi salva corretamente ou consulte os logs."
+            )
+
+        # Download do arquivo de log (LOCAL e NUVEM)
+        if last_result["log"]:
+            log_name, log_bytes = last_result["log"]
+            st.download_button(
+                label=f"📥 Baixar Arquivo de Log: {log_name}",
+                data=log_bytes,
+                file_name=log_name,
+                mime="text/plain",
+                use_container_width=True,
+                key="download_log"
+            )
+        elif show_messages:
+            if last_result["modo_local"]:
+                st.warning("⚠️ Arquivo de log não foi gerado nesta execução.")
+            else:
+                st.info(
+                    "ℹ️ Processamento concluído. "
+                    "Os dados foram atualizados no SharePoint. "
+                    "Arquivo de log não foi gerado nesta execução."
+                )
+
+        if show_messages:
+            st.session_state["show_result_messages"] = False
+
+
+if __name__ == "__main__":
+    main()
