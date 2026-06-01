@@ -104,7 +104,7 @@ def load_config() -> dict:
             
     if secrets_data:
         token = secrets_data.get('ACCESS_TOKEN', '')
-        st.info(f"STREAMLIT_CLOUD: {st.secrets.get('STREAMLIT_CLOUD', 'Não definido')}")
+        st.info(f"STREAMLIT_CLOUD: {secrets_data.get('STREAMLIT_CLOUD', 'Não definido')}")
     else:
         st.warning("⚠️ Nenhum secret encontrado — verifique .env ou .streamlit/secrets.toml")
             
