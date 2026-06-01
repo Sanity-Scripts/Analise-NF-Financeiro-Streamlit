@@ -81,6 +81,15 @@ def load_config() -> dict:
     for key in values.keys():
         if key in secrets_data and not isinstance(secrets_data[key], dict):
             values[key] = str(secrets_data[key])
+            
+    if secrets_data:
+        token = secrets_data.get('TENANT_ID', '')
+        hostname = secrets_data.get('HOSTNAME', '')
+        st.info(f"Hostname: {hostname}" if hostname else "❌ Hostname vazio")
+        st.info(f"Tenant ID: {token[:8]}..." if token else "❌ Tenant ID vazio")
+        
+    else:
+        st.warning("⚠️ Nenhum secret encontrado — verifique .env ou .streamlit/secrets.toml")
 
     # 4. CRUCIAL: Sobrescreve com as variáveis reais do ambiente do sistema (Nuvem/OS)
     # Só trazemos para o dicionário as chaves que o seu app realmente espera usar
