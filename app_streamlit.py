@@ -28,6 +28,8 @@ SECRET_MAIN_B64_KEYS = ("main_py_b64", "script_oculto_b64")
 SECRET_MAIN_KEYS = ("main_py", "script_oculto")
 SECRET_MAIN_B64_ENV_KEYS = ("STREAMLIT_SECRET_MAIN_PY_B64", "MAIN_PY_CODE_B64", "SCRIPT_OCULTO_B64")
 SECRET_MAIN_ENV_KEYS = ("STREAMLIT_SECRET_MAIN_PY", "MAIN_PY_CODE", "SCRIPT_OCULTO")
+SECRET_CONFIG_SECTIONS = ("config", "env", "ambiente", SECRET_SECTION)
+SECRET_CODE_KEYS = set(SECRET_MAIN_B64_KEYS + SECRET_MAIN_KEYS)
 
 DEFAULTS = {
     "ACCESS_TOKEN": "",
@@ -77,14 +79,14 @@ def load_config() -> dict:
         pass
 
     # 3.5. Atualiza com Secrets simples do Streamlit, se existirem.
-    secrets_data = _load_secrets_dict()
+    secrets_data = _flatten_config_secrets(_load_secrets_dict())
     for key in values.keys():
         if key in secrets_data and not isinstance(secrets_data[key], dict):
             values[key] = str(secrets_data[key])
             
     if secrets_data:
-        token = secrets_data.get('TENANT_ID', '')
-        hostname = secrets_data.get('HOSTNAME', '')
+        token = values.get('TENANT_ID', '')
+        hostname = values.get('HOSTNAME', '')
         st.info(f"Hostname: {hostname}" if hostname else "❌ Hostname vazio")
         st.info(f"Tenant ID: {token[:8]}..." if token else "❌ Tenant ID vazio")
         
@@ -124,6 +126,25 @@ def _load_secrets_dict() -> dict:
                 return tomllib.load(file)
         except Exception:
             return {}
+
+
+def _flatten_config_secrets(secrets_data: dict) -> dict:
+    flat = {}
+
+    for key, value in secrets_data.items():
+        if not isinstance(value, dict) and key not in SECRET_CODE_KEYS:
+            flat[key] = value
+
+    for section in SECRET_CONFIG_SECTIONS:
+        section_values = secrets_data.get(section, {})
+        if not isinstance(section_values, dict):
+            continue
+
+        for key, value in section_values.items():
+            if not isinstance(value, dict) and key not in SECRET_CODE_KEYS:
+                flat[key] = value
+
+    return flat
 
 
 def _secret_value(section: str, key: str) -> str:
