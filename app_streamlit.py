@@ -551,7 +551,7 @@ def main() -> None:
 
     config = load_config()
     
-    print("Configurações carregadas:", config.keys())
+    st.info("Configurações carregadas:" + str(config.keys()))
 
     if "last_result" not in st.session_state:
         st.session_state["last_result"] = None
