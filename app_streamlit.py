@@ -552,6 +552,7 @@ def main() -> None:
     config = load_config()
     
     st.info("Configurações carregadas:" + str(config.keys()))
+    st.info("Token de acesso presente: " + config.get("ACCESS_TOKEN", "")[:8] + "..." if config.get("ACCESS_TOKEN") else "❌ Token de acesso vazio")
 
     if "last_result" not in st.session_state:
         st.session_state["last_result"] = None
