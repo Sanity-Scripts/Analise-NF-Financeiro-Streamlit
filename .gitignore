@@ -196,3 +196,5 @@ cython_debug/
 /pdfs_tmp_sharepoint
 
 /pdfs
+
+t.py

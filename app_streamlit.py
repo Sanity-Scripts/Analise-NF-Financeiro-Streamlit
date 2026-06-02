@@ -80,8 +80,6 @@ def load_config() -> dict:
 
     # 3.5. Atualiza com Secrets simples do Streamlit, se existirem.
     secrets_data = _flatten_config_secrets(_load_secrets_dict())
-    st.info(f"🔍 Verificando secrets do Streamlit para configuração... Chaves encontradas: {list(secrets_data.keys())}")
-    st.info(f"Carregando secrets simples do Streamlit... Chaves encontradas: {list(secrets_data.keys())}")
     for key in values.keys():
         if key in secrets_data and not isinstance(secrets_data[key], dict):
             values[key] = str(secrets_data[key])
