@@ -80,6 +80,7 @@ def load_config() -> dict:
 
     # 3.5. Atualiza com Secrets simples do Streamlit, se existirem.
     secrets_data = _flatten_config_secrets(_load_secrets_dict())
+    st.info(f"Carregando secrets simples do Streamlit... Chaves encontradas: {list(secrets_data.keys())}")
     for key in values.keys():
         if key in secrets_data and not isinstance(secrets_data[key], dict):
             values[key] = str(secrets_data[key])
@@ -113,8 +114,6 @@ def save_config(values: dict) -> None:
 
 def _load_secrets_dict() -> dict:
     try:
-        print("Carregando via dict st.secrets...", st.secrets.to_dict().keys())
-        st.info("Carregando via dict st.secrets..."+ str(st.secrets.to_dict().keys()))
         return st.secrets.to_dict()
     except Exception as err:
         print(f"Erro ao carregar secrets via dict: {err}")
@@ -127,8 +126,6 @@ def _load_secrets_dict() -> dict:
             import tomllib
 
             with secrets_path.open("rb") as file:
-                print(("Carregando via path dir st.secrets...", tomllib.load(file).keys()))
-                st.info("Carregando via path dir st.secrets..." + str(tomllib.load(file).keys()))
                 return tomllib.load(file)
         except Exception as err:
             print(f"Erro ao carregar secrets via path dir: {err}")
