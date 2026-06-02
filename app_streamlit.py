@@ -113,6 +113,8 @@ def save_config(values: dict) -> None:
 
 def _load_secrets_dict() -> dict:
     try:
+        print("Carregando via dict st.secrets...", st.secrets.to_dict().keys())
+        st.info("Carregando via dict st.secrets..."+ str(st.secrets.to_dict().keys()))
         return st.secrets.to_dict()
     except Exception as err:
         print(f"Erro ao carregar secrets via dict: {err}")
@@ -120,10 +122,13 @@ def _load_secrets_dict() -> dict:
         if not secrets_path.exists():
             return {}
         
+        
         try:
             import tomllib
 
             with secrets_path.open("rb") as file:
+                print(("Carregando via path dir st.secrets...", tomllib.load(file).keys()))
+                st.info("Carregando via path dir st.secrets..." + str(tomllib.load(file).keys()))
                 return tomllib.load(file)
         except Exception as err:
             print(f"Erro ao carregar secrets via path dir: {err}")
@@ -550,9 +555,6 @@ def main() -> None:
     render_header()
 
     config = load_config()
-    
-    st.info("Configurações carregadas:" + str(config.keys()))
-    st.info("Token de acesso presente: " + config.get("ACCESS_TOKEN", "")[:8] + "..." if config.get("ACCESS_TOKEN") else "❌ Token de acesso vazio")
 
     if "last_result" not in st.session_state:
         st.session_state["last_result"] = None
