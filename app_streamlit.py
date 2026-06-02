@@ -84,14 +84,14 @@ def load_config() -> dict:
         if key in secrets_data and not isinstance(secrets_data[key], dict):
             values[key] = str(secrets_data[key])
             
-    if secrets_data:
-        token = values.get('TENANT_ID', '')
-        hostname = values.get('HOSTNAME', '')
-        st.info(f"Hostname: {hostname}" if hostname else "❌ Hostname vazio")
-        st.info(f"Tenant ID: {token[:8]}..." if token else "❌ Tenant ID vazio")
+    # if secrets_data:
+    #     token = values.get('TENANT_ID', '')
+    #     hostname = values.get('HOSTNAME', '')
+    #     st.info(f"Hostname: {hostname}" if hostname else "❌ Hostname vazio")
+    #     st.info(f"Tenant ID: {token[:8]}..." if token else "❌ Tenant ID vazio")
         
-    else:
-        st.warning("⚠️ Nenhum secret encontrado — verifique .env ou .streamlit/secrets.toml")
+    # else:
+    #     st.warning("⚠️ Nenhum secret encontrado — verifique .env ou .streamlit/secrets.toml")
 
     # 4. CRUCIAL: Sobrescreve com as variáveis reais do ambiente do sistema (Nuvem/OS)
     # Só trazemos para o dicionário as chaves que o seu app realmente espera usar
@@ -114,17 +114,19 @@ def save_config(values: dict) -> None:
 def _load_secrets_dict() -> dict:
     try:
         return st.secrets.to_dict()
-    except Exception:
+    except Exception as err:
+        print(f"Erro ao carregar secrets via dict: {err}")
         secrets_path = ROOT_DIR / ".streamlit" / "secrets.toml"
         if not secrets_path.exists():
             return {}
-
+        
         try:
             import tomllib
 
             with secrets_path.open("rb") as file:
                 return tomllib.load(file)
-        except Exception:
+        except Exception as err:
+            print(f"Erro ao carregar secrets via path dir: {err}")
             return {}
 
 
@@ -548,6 +550,8 @@ def main() -> None:
     render_header()
 
     config = load_config()
+    
+    print("Configurações carregadas:", config.keys())
 
     if "last_result" not in st.session_state:
         st.session_state["last_result"] = None
