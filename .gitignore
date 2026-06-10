@@ -197,4 +197,4 @@ cython_debug/
 
 /pdfs
 
-t.py
+encode_script.py

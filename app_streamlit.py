@@ -54,6 +54,23 @@ DEFAULTS = {
 }
 
 
+def limpar_pdfs_tmp_sharepoint() -> None:
+    """
+    Remove todos os arquivos da area temporaria usada pelo modo nuvem.
+    """
+    if not TMP_PDFS_DIR.exists():
+        return
+
+    try:
+        for item in TMP_PDFS_DIR.iterdir():
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+    except Exception as e:
+        print(f"Aviso: Erro ao limpar PDFs temporarios antes de processar: {e}")
+
+
 
 def load_config() -> dict:
     # 1. Começa com os valores padrão hardcoded (se houver)
@@ -461,15 +478,9 @@ def render_header() -> None:
 def build_env_payload(config: dict, modo_operacao: str, token_acesso: str, form_values: dict) -> dict:
     modo_local = modo_operacao == "LOCAL"
     path_pdfs = form_values["path_pdfs"]
-    
-    if TMP_PDFS_DIR.exists():
-        try:
-            for pdf_file in TMP_PDFS_DIR.glob("*.pdf"):
-                pdf_file.unlink()
-        except Exception as e:
-            print(f"Aviso: Erro ao limpar PDFs temporários antes de processar: {e}")
 
     if not modo_local:
+        limpar_pdfs_tmp_sharepoint()
         TMP_PDFS_DIR.mkdir(parents=True, exist_ok=True)
         path_pdfs = str(TMP_PDFS_DIR)
 
@@ -487,6 +498,7 @@ def build_env_payload(config: dict, modo_operacao: str, token_acesso: str, form_
         "MODO_LOCAL": str(modo_local).lower(),
         "CAMINHO_PLANILHA_LOCAL": form_values["caminho_planilha_local"] if modo_local else "",
         "PATH_PDFS": path_pdfs,
+        "LOCAL_UPLOAD_PDFS_DIR": path_pdfs if modo_local else "",
         "BAIXAR_PDFS_SHAREPOINT": str(not modo_local).lower(),
         "CAMINHO_PASTA_PDFS_SHAREPOINT": (
             "" if modo_local else form_values["caminho_pasta_pdfs_sharepoint"]
@@ -698,11 +710,7 @@ def main() -> None:
 
             # Limpa PDFs temporários do modo NUVEM antes de processar (última execução)
             if modo_operacao == "NUVEM" and TMP_PDFS_DIR.exists():
-                try:
-                    for pdf_file in TMP_PDFS_DIR.glob("*.pdf"):
-                        pdf_file.unlink()
-                except Exception as e:
-                    print(f"Aviso: Erro ao limpar PDFs temporários: {e}")
+                limpar_pdfs_tmp_sharepoint()
 
             # save_config(payload)
 
