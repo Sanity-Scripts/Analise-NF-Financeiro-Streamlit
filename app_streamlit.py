@@ -461,6 +461,13 @@ def render_header() -> None:
 def build_env_payload(config: dict, modo_operacao: str, token_acesso: str, form_values: dict) -> dict:
     modo_local = modo_operacao == "LOCAL"
     path_pdfs = form_values["path_pdfs"]
+    
+    if TMP_PDFS_DIR.exists():
+        try:
+            for pdf_file in TMP_PDFS_DIR.glob("*.pdf"):
+                pdf_file.unlink()
+        except Exception as e:
+            print(f"Aviso: Erro ao limpar PDFs temporários antes de processar: {e}")
 
     if not modo_local:
         TMP_PDFS_DIR.mkdir(parents=True, exist_ok=True)
